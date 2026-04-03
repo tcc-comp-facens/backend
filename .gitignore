@@ -1,0 +1,36 @@
+# ── Ambiente Python ───────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# ── Ambientes virtuais ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Pytest / Hypothesis ───────────────────────────────────────────────────────
+.pytest_cache/
+.hypothesis/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Build / distribuição ──────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+
+# ── Dados ETL locais (CSVs do SIOPS, parquet do PySUS) ───────────────────────
+data/
+*.csv
+*.parquet
+*.dbc
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
