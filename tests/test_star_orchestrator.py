@@ -1,7 +1,7 @@
 """
-Testes unitários para OrquestradorEstrela.
+Testes unitários para OrquestradorEstrela (reescrito com 8 agentes especializados).
 
-Valida: Requisitos 5.1, 5.2, 5.3, 5.4, 5.5
+Valida: Requisitos 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 11.1, 11.2
 """
 
 from queue import Queue
@@ -16,12 +16,6 @@ from agents.star.orchestrator import OrquestradorEstrela
 @pytest.fixture
 def mock_neo4j():
     client = MagicMock()
-    client.get_despesas.return_value = [
-        {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 1000.0},
-    ]
-    client.get_indicadores.return_value = [
-        {"tipo": "dengue", "ano": 2020, "valor": 150.0},
-    ]
     return client
 
 
@@ -39,8 +33,54 @@ def ws_queue():
     return Queue()
 
 
+def _patch_all_agents():
+    """Context manager that patches all 8 specialized agent classes."""
+    return (
+        patch("agents.star.orchestrator.AgenteVigilanciaEpidemiologica"),
+        patch("agents.star.orchestrator.AgenteSaudeHospitalar"),
+        patch("agents.star.orchestrator.AgenteAtencaoPrimaria"),
+        patch("agents.star.orchestrator.AgenteMortalidade"),
+        patch("agents.star.orchestrator.AgenteContextoOrcamentario"),
+        patch("agents.star.orchestrator.AgenteCorrelacao"),
+        patch("agents.star.orchestrator.AgenteAnomalias"),
+        patch("agents.star.orchestrator.AgenteSintetizador"),
+    )
+
+
+def _setup_domain_mocks(mock_vig, mock_hosp, mock_prim, mock_mort):
+    """Configure domain agent mocks to return valid data."""
+    mock_vig.return_value.query.return_value = {
+        "despesas": [{"subfuncao": 305, "subfuncaoNome": "Vigilância Epidemiológica", "ano": 2020, "valor": 500.0}],
+        "indicadores": [{"tipo": "dengue", "ano": 2020, "valor": 150.0}],
+    }
+    mock_hosp.return_value.query.return_value = {
+        "despesas": [{"subfuncao": 302, "subfuncaoNome": "Assistência Hospitalar", "ano": 2020, "valor": 800.0}],
+        "indicadores": [{"tipo": "internacoes", "ano": 2020, "valor": 200.0}],
+    }
+    mock_prim.return_value.query.return_value = {
+        "despesas": [{"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 1000.0}],
+        "indicadores": [{"tipo": "vacinacao", "ano": 2020, "valor": 80.0}],
+    }
+    mock_mort.return_value.query.return_value = {
+        "despesas": [],
+        "indicadores": [{"tipo": "mortalidade", "ano": 2020, "valor": 50.0}],
+    }
+
+
+def _setup_analytical_mocks(mock_ctx, mock_corr, mock_anom, mock_sint):
+    """Configure analytical agent mocks to return valid data."""
+    mock_ctx.return_value.analyze_trends.return_value = {
+        301: {"subfuncao": 301, "tendencia": "crescimento", "variacao_media_percentual": 5.0, "anos_analisados": [2020]},
+    }
+    mock_corr.return_value.compute.return_value = [
+        {"subfuncao": 301, "tipo_indicador": "vacinacao", "pearson": 0.8, "spearman": 0.75, "kendall": 0.7, "classificacao": "alta", "n_pontos": 3},
+    ]
+    mock_anom.return_value.detect.return_value = []
+    mock_sint.return_value.synthesize.return_value = "Análise completa."
+
+
 class TestOrquestradorInit:
-    """Req 5.1: topologia estrela com OrquestradorEstrela central."""
+    """Req 9.1: topologia estrela com OrquestradorEstrela central."""
 
     def test_inherits_from_agente_bdi(self, mock_neo4j):
         orch = OrquestradorEstrela("orch-1", mock_neo4j)
@@ -77,8 +117,8 @@ class TestBDIOverrides:
         orch.update_beliefs({"analysis_id": "a-1"})
         desires = orch.deliberate()
         goals = [d["goal"] for d in desires]
-        assert "consultar_dados" in goals
-        assert "analisar_dados" in goals
+        assert "executar_pipeline_dominio" in goals
+        assert "executar_pipeline_analitico" in goals
         assert "persistir_metricas" in goals
 
     def test_deliberate_without_analysis_id(self, mock_neo4j):
@@ -87,81 +127,70 @@ class TestBDIOverrides:
         assert desires == []
 
 
-class TestRunIntermediatesCommunication:
-    """Req 5.2: OrquestradorEstrela intermedia toda comunicação."""
+class TestRunPipeline:
+    """Req 9.2, 9.3, 9.4, 9.5, 9.6: full pipeline with 8 agents."""
 
-    def test_run_delegates_to_consultant_then_analyzer(
+    def test_run_delegates_to_all_agents(
         self, mock_neo4j, params, ws_queue
     ):
         orch = OrquestradorEstrela("orch-1", mock_neo4j)
+        patches = _patch_all_agents()
 
-        with patch(
-            "agents.star.orchestrator.AgenteConsultorStar"
-        ) as MockConsultant, patch(
-            "agents.star.orchestrator.AgenteAnalisadorStar"
-        ) as MockAnalyzer:
-            mock_consultant = MockConsultant.return_value
-            mock_consultant.query.return_value = {
-                "despesas": [{"subfuncao": 301, "ano": 2020, "valor": 1000.0}],
-                "indicadores": [{"tipo": "dengue", "ano": 2020, "valor": 150.0}],
-            }
-            mock_analyzer = MockAnalyzer.return_value
-            mock_analyzer.analyze.return_value = {
-                "correlacoes": [],
-                "anomalias": [],
-                "texto_analise": "Análise completa.",
-            }
+        with patches[0] as MockVig, patches[1] as MockHosp, \
+             patches[2] as MockPrim, patches[3] as MockMort, \
+             patches[4] as MockCtx, patches[5] as MockCorr, \
+             patches[6] as MockAnom, patches[7] as MockSint:
+
+            _setup_domain_mocks(MockVig, MockHosp, MockPrim, MockMort)
+            _setup_analytical_mocks(MockCtx, MockCorr, MockAnom, MockSint)
 
             result = orch.run("analysis-1", params, ws_queue)
 
-            # Consultant was called with correct params (Req 5.3)
-            mock_consultant.query.assert_called_once_with(
-                analysis_id="analysis-1",
-                date_from=2020,
-                date_to=2022,
-                health_params=["dengue", "covid"],
-            )
+            # All 4 domain agents were called
+            MockVig.return_value.query.assert_called_once()
+            MockHosp.return_value.query.assert_called_once()
+            MockPrim.return_value.query.assert_called_once()
+            MockMort.return_value.query.assert_called_once()
 
-            # Analyzer received data FROM the consultant via orchestrator (Req 5.2)
-            mock_analyzer.analyze.assert_called_once()
-            call_args = mock_analyzer.analyze.call_args
-            assert call_args[0][0] == "analysis-1"
-            assert call_args[0][1] == mock_consultant.query.return_value
-            assert call_args[0][2] is ws_queue
+            # Analytical agents were called
+            MockCtx.return_value.analyze_trends.assert_called_once()
+            MockCorr.return_value.compute.assert_called_once()
+            MockAnom.return_value.detect.assert_called_once()
+            MockSint.return_value.synthesize.assert_called_once()
 
+            # Result contains all expected keys
             assert "correlacoes" in result
+            assert "anomalias" in result
             assert "texto_analise" in result
+            assert "despesas" in result
+            assert "indicadores" in result
+            assert "contexto_orcamentario" in result
+            assert "message_count" in result
 
 
 class TestMetricsPersistence:
-    """Req 5.4: registrar métricas de tempo de execução por agente."""
+    """Req 9.7: registrar métricas de tempo de execução por agente."""
 
-    def test_persists_metrics_for_both_agents(
+    def test_persists_metrics_for_all_agents(
         self, mock_neo4j, params, ws_queue
     ):
         orch = OrquestradorEstrela("orch-1", mock_neo4j)
+        patches = _patch_all_agents()
 
-        with patch(
-            "agents.star.orchestrator.AgenteConsultorStar"
-        ) as MockConsultant, patch(
-            "agents.star.orchestrator.AgenteAnalisadorStar"
-        ) as MockAnalyzer:
-            MockConsultant.return_value.query.return_value = {
-                "despesas": [],
-                "indicadores": [],
-            }
-            MockAnalyzer.return_value.analyze.return_value = {
-                "correlacoes": [],
-                "anomalias": [],
-                "texto_analise": "",
-            }
+        with patches[0] as MockVig, patches[1] as MockHosp, \
+             patches[2] as MockPrim, patches[3] as MockMort, \
+             patches[4] as MockCtx, patches[5] as MockCorr, \
+             patches[6] as MockAnom, patches[7] as MockSint:
+
+            _setup_domain_mocks(MockVig, MockHosp, MockPrim, MockMort)
+            _setup_analytical_mocks(MockCtx, MockCorr, MockAnom, MockSint)
 
             orch.run("analysis-1", params, ws_queue)
 
-            # save_metrica should be called twice: once for consultant, once for analyzer
-            assert mock_neo4j.save_metrica.call_count == 2
+            # save_metrica should be called 8 times: once per agent
+            assert mock_neo4j.save_metrica.call_count == 8
 
-            # Both calls should use architecture "star"
+            # All calls should use architecture "star"
             for call in mock_neo4j.save_metrica.call_args_list:
                 metrica = call[0][0]
                 analysis = call[0][1]
@@ -173,90 +202,118 @@ class TestMetricsPersistence:
 
 
 class TestErrorHandling:
-    """Req 5.5: enviar evento de erro via WebSocket e encerrar."""
+    """Req 9.8: graceful degradation when agents fail."""
 
-    def test_sends_error_event_on_consultant_failure(
+    def test_continues_when_domain_agent_fails(
         self, mock_neo4j, params, ws_queue
     ):
         orch = OrquestradorEstrela("orch-1", mock_neo4j)
+        patches = _patch_all_agents()
 
-        with patch(
-            "agents.star.orchestrator.AgenteConsultorStar"
-        ) as MockConsultant, patch(
-            "agents.star.orchestrator.AgenteAnalisadorStar"
-        ):
-            MockConsultant.return_value.query.side_effect = RuntimeError(
-                "Neo4j connection failed"
-            )
+        with patches[0] as MockVig, patches[1] as MockHosp, \
+             patches[2] as MockPrim, patches[3] as MockMort, \
+             patches[4] as MockCtx, patches[5] as MockCorr, \
+             patches[6] as MockAnom, patches[7] as MockSint:
 
-            with pytest.raises(RuntimeError, match="Neo4j connection failed"):
-                orch.run("analysis-1", params, ws_queue)
-
-            # Error event should be in the queue
-            assert not ws_queue.empty()
-            event = ws_queue.get_nowait()
-            assert event["analysisId"] == "analysis-1"
-            assert event["architecture"] == "star"
-            assert event["type"] == "error"
-            assert "Neo4j connection failed" in event["payload"]
-
-    def test_sends_error_event_on_analyzer_failure(
-        self, mock_neo4j, params, ws_queue
-    ):
-        orch = OrquestradorEstrela("orch-1", mock_neo4j)
-
-        with patch(
-            "agents.star.orchestrator.AgenteConsultorStar"
-        ) as MockConsultant, patch(
-            "agents.star.orchestrator.AgenteAnalisadorStar"
-        ) as MockAnalyzer:
-            MockConsultant.return_value.query.return_value = {
-                "despesas": [],
+            # Vigilancia fails
+            MockVig.return_value.query.side_effect = RuntimeError("Neo4j down")
+            # Others succeed
+            MockHosp.return_value.query.return_value = {
+                "despesas": [{"subfuncao": 302, "ano": 2020, "valor": 800.0}],
                 "indicadores": [],
             }
-            MockAnalyzer.return_value.analyze.side_effect = ValueError(
-                "Analysis failed"
-            )
+            MockPrim.return_value.query.return_value = {"despesas": [], "indicadores": []}
+            MockMort.return_value.query.return_value = {"despesas": [], "indicadores": []}
+            _setup_analytical_mocks(MockCtx, MockCorr, MockAnom, MockSint)
 
-            with pytest.raises(ValueError, match="Analysis failed"):
-                orch.run("analysis-1", params, ws_queue)
+            # Should NOT raise — graceful degradation
+            result = orch.run("analysis-1", params, ws_queue)
 
-            # Drain queue to find error event (metrics persist may have added items)
+            # Error event should be in the queue
             events = []
             while not ws_queue.empty():
                 events.append(ws_queue.get_nowait())
-
             error_events = [e for e in events if e.get("type") == "error"]
-            assert len(error_events) == 1
-            assert error_events[0]["analysisId"] == "analysis-1"
+            assert len(error_events) >= 1
             assert error_events[0]["architecture"] == "star"
-            assert "Analysis failed" in error_events[0]["payload"]
 
-    def test_reraises_exception_after_error_event(
+            # Pipeline still completed
+            assert "correlacoes" in result
+            assert "texto_analise" in result
+
+    def test_continues_when_analytical_agent_fails(
         self, mock_neo4j, params, ws_queue
     ):
         orch = OrquestradorEstrela("orch-1", mock_neo4j)
+        patches = _patch_all_agents()
 
-        with patch(
-            "agents.star.orchestrator.AgenteConsultorStar"
-        ) as MockConsultant, patch(
-            "agents.star.orchestrator.AgenteAnalisadorStar"
-        ):
-            MockConsultant.return_value.query.side_effect = RuntimeError("boom")
+        with patches[0] as MockVig, patches[1] as MockHosp, \
+             patches[2] as MockPrim, patches[3] as MockMort, \
+             patches[4] as MockCtx, patches[5] as MockCorr, \
+             patches[6] as MockAnom, patches[7] as MockSint:
 
-            with pytest.raises(RuntimeError, match="boom"):
-                orch.run("analysis-1", params, ws_queue)
+            _setup_domain_mocks(MockVig, MockHosp, MockPrim, MockMort)
+            MockCtx.return_value.analyze_trends.return_value = {}
+            MockCorr.return_value.compute.side_effect = ValueError("Computation error")
+            MockAnom.return_value.detect.return_value = []
+            MockSint.return_value.synthesize.return_value = "Partial analysis."
+
+            result = orch.run("analysis-1", params, ws_queue)
+
+            # Error event for correlacao failure
+            events = []
+            while not ws_queue.empty():
+                events.append(ws_queue.get_nowait())
+            error_events = [e for e in events if e.get("type") == "error"]
+            assert len(error_events) >= 1
+
+            # Correlacoes should be empty due to failure
+            assert result["correlacoes"] == []
+            # But text analysis still ran
+            assert result["texto_analise"] == "Partial analysis."
+
+
+class TestMessageCount:
+    """Req 11.1, 11.2: message counter integration."""
+
+    def test_message_count_in_result(
+        self, mock_neo4j, params, ws_queue
+    ):
+        orch = OrquestradorEstrela("orch-1", mock_neo4j)
+        patches = _patch_all_agents()
+
+        with patches[0] as MockVig, patches[1] as MockHosp, \
+             patches[2] as MockPrim, patches[3] as MockMort, \
+             patches[4] as MockCtx, patches[5] as MockCorr, \
+             patches[6] as MockAnom, patches[7] as MockSint:
+
+            _setup_domain_mocks(MockVig, MockHosp, MockPrim, MockMort)
+            _setup_analytical_mocks(MockCtx, MockCorr, MockAnom, MockSint)
+
+            result = orch.run("analysis-1", params, ws_queue)
+
+            # message_count should be present and equal to 2 * 8 = 16
+            assert "message_count" in result
+            assert result["message_count"] == 16  # 8 agents × 2 messages each
+
+            # metric event should be in the queue
+            events = []
+            while not ws_queue.empty():
+                events.append(ws_queue.get_nowait())
+            metric_events = [e for e in events if e.get("type") == "metric"]
+            assert len(metric_events) >= 1
 
 
 class TestExportsFromInit:
-    """Verify __init__.py exports all three star agent classes."""
+    """Verify __init__.py exports only OrquestradorEstrela."""
 
-    def test_import_all_star_agents(self):
-        from agents.star import (
-            AgenteConsultorStar,
-            AgenteAnalisadorStar,
-            OrquestradorEstrela,
-        )
-        assert AgenteConsultorStar is not None
-        assert AgenteAnalisadorStar is not None
-        assert OrquestradorEstrela is not None
+    def test_import_orchestrator(self):
+        from agents.star import OrquestradorEstrela as OE
+        assert OE is not None
+
+    def test_all_exports(self):
+        from agents.star import __all__
+        assert "OrquestradorEstrela" in __all__
+        # Old classes should NOT be exported
+        assert "AgenteConsultorStar" not in __all__
+        assert "AgenteAnalisadorStar" not in __all__

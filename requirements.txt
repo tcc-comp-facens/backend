@@ -8,3 +8,9 @@ pytest
 pytest-asyncio
 python-dotenv
 httpx
+google-genai
+groq
+openpyxl
+xlrd
+pandas
+scipy

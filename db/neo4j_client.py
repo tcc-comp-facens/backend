@@ -153,9 +153,10 @@ class Neo4jClient:
 
         Campos esperados em `analise`:
           id, dateFrom, dateTo, healthParams (dict ou str JSON),
-          starStatus, hierStatus, createdAt (opcional)
+          starStatus, hierStatus, createdAt (opcional),
+          starMessageCount, hierMessageCount (opcional, Req 11.3)
 
-        Requisitos: 12.3, 12.5
+        Requisitos: 11.3, 12.3, 12.5
         """
         health_params = analise.get("healthParams", {})
         if isinstance(health_params, dict):
@@ -165,16 +166,18 @@ class Neo4jClient:
 
         query = """
         MERGE (a:Analise {id: $id})
-        SET a.dateFrom        = $dateFrom,
-            a.dateTo          = $dateTo,
-            a.healthParams    = $healthParams,
-            a.starStatus      = $starStatus,
-            a.starTextAnalysis = $starTextAnalysis,
-            a.starCompletedAt  = $starCompletedAt,
-            a.hierStatus      = $hierStatus,
-            a.hierTextAnalysis = $hierTextAnalysis,
-            a.hierCompletedAt  = $hierCompletedAt,
-            a.createdAt       = $createdAt
+        SET a.dateFrom          = $dateFrom,
+            a.dateTo            = $dateTo,
+            a.healthParams      = $healthParams,
+            a.starStatus        = $starStatus,
+            a.starTextAnalysis  = $starTextAnalysis,
+            a.starCompletedAt   = $starCompletedAt,
+            a.starMessageCount  = $starMessageCount,
+            a.hierStatus        = $hierStatus,
+            a.hierTextAnalysis  = $hierTextAnalysis,
+            a.hierCompletedAt   = $hierCompletedAt,
+            a.hierMessageCount  = $hierMessageCount,
+            a.createdAt         = $createdAt
         """
         with self._driver.session() as session:
             session.run(
@@ -186,9 +189,11 @@ class Neo4jClient:
                 starStatus=analise.get("starStatus", "pending"),
                 starTextAnalysis=analise.get("starTextAnalysis"),
                 starCompletedAt=analise.get("starCompletedAt"),
+                starMessageCount=analise.get("starMessageCount"),
                 hierStatus=analise.get("hierStatus", "pending"),
                 hierTextAnalysis=analise.get("hierTextAnalysis"),
                 hierCompletedAt=analise.get("hierCompletedAt"),
+                hierMessageCount=analise.get("hierMessageCount"),
                 createdAt=created_at,
             )
 
